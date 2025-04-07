@@ -13,6 +13,11 @@ jobs:
         with:
           fetch-depth: 0 # Required for git diff
 
+      - name: Configure Git user
+        run: |
+          git config user.email "github-actions@github.com"
+          git config user.name "GitHub Actions"
+
       - name: Check for merge conflicts
         id: conflicts
         run: |
