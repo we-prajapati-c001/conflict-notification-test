@@ -1,43 +1,40 @@
-name: Notify PR Conflict with Comment
+name: Check for Merge Conflicts
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [synchronize, opened, reopened]
 
 jobs:
-  check-conflict:
+  check_conflicts:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Wait for GitHub to calculate mergeable state
-        run: sleep 10
-
-      - name: Check PR conflict and comment
-        uses: actions/github-script@v7
+      - name: Checkout code
+        uses: actions/checkout@v3
         with:
-          script: |
-            const prNumber = context.payload.pull_request.number;
+          fetch-depth: 0 # Required for git diff
 
-            // Re-fetch PR with mergeability status
-            const { data: pr } = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: prNumber
-            });
+      - name: Check for merge conflicts
+        id: conflicts
+        run: |
+          git fetch origin ${{ github.event.pull_request.base.ref }}
+          if git merge-base --is-ancestor origin/${{ github.event.pull_request.base.ref }} HEAD; then
+            echo "No merge conflicts."
+            echo "::set-output name=has_conflicts::false"
+          else
+            git merge origin/${{ github.event.pull_request.base.ref }}
+            if [[ $? -ne 0 ]]; then
+              echo "Merge conflicts detected."
+              echo "::set-output name=has_conflicts::true"
+            else
+              echo "No merge conflicts."
+              echo "::set-output name=has_conflicts::false"
+            fi
+          fi
 
-            const state = pr.mergeable_state;
-            const title = pr.title;
-
-            if (state === 'dirty') {
-              const body = `⚠️ **Merge conflict detected** for PR **#${prNumber} - ${title}**.\n\nPlease resolve the conflict so this can be merged.`;
-
-              // Post a comment on the PR
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: prNumber,
-                body: body
-              });
-            } else {
-              console.log(`PR #${prNumber} is mergeable. No comment posted.`);
-            }
+      - name: Comment if conflicts exist
+        if: steps.conflicts.outputs.has_conflicts == 'true'
+        uses: peter-evans/create-or-update-comment@v3
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            @${{ github.event.pull_request.user.login }}, this PR has merge conflicts. Please resolve them.
