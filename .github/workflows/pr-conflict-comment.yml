@@ -1,45 +1,57 @@
-name: Check for Merge Conflicts
+name: Notify PR Conflict with Comment
 
 on:
   pull_request:
-    types: [synchronize, opened, reopened]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
 
 jobs:
-  check_conflicts:
+  check-conflict:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - name: Check PR conflict and comment
+        uses: actions/github-script@v7
         with:
-          fetch-depth: 0 # Required for git diff
+          script: |
+            const pr = context.payload.pull_request;
 
-      - name: Configure Git user
-        run: |
-          git config user.email "github-actions@github.com"
-          git config user.name "GitHub Actions"
+            if (!pr) {
+              console.log('No PR context. This workflow must be triggered by a pull_request event.');
+              return;
+            }
 
-      - name: Check for merge conflicts
-        id: conflicts
-        run: |
-          git fetch origin ${{ github.event.pull_request.base.ref }}
-          if git merge-base --is-ancestor origin/${{ github.event.pull_request.base.ref }} HEAD; then
-            echo "No merge conflicts."
-            echo "::set-output name=has_conflicts::false"
-          else
-            git merge origin/${{ github.event.pull_request.base.ref }}
-            if [[ $? -ne 0 ]]; then
-              echo "Merge conflicts detected."
-              echo "::set-output name=has_conflicts::true"
-            else
-              echo "No merge conflicts."
-              echo "::set-output name=has_conflicts::false"
-            fi
-          fi
+            const prNumber = pr.number;
 
-      - name: Comment if conflicts exist
-        if: steps.conflicts.outputs.has_conflicts == 'true'
-        uses: peter-evans/create-or-update-comment@v3
-        with:
-          issue-number: ${{ github.event.pull_request.number }}
-          body: |
-            @${{ github.event.pull_request.user.login }}, this PR has merge conflicts. Please resolve them.
+            // Retry loop: wait until mergeable_state is not null
+            let prData, retries = 10;
+            while (retries > 0) {
+              const res = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber
+              });
+              prData = res.data;
+
+              if (prData.mergeable_state !== null) break;
+
+              console.log('mergeable_state not ready, retrying in 3s...');
+              await new Promise(r => setTimeout(r, 3000));
+              retries--;
+            }
+
+            const state = prData.mergeable_state;
+            const title = prData.title;
+
+            if (state === 'dirty') {
+              const body = `⚠️ **Merge conflict detected** for PR **#${prNumber} - ${title}**.\n\nPlease resolve the conflict so this can be merged.`;
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: body
+              });
+            } else {
+              console.log(`PR #${prNumber} is mergeable or clean (${state}). No comment posted.`);
+            }
