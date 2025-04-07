@@ -1,3 +1,3 @@
 # conflict-notification-test
 
-Feature Three
+Feature 3
